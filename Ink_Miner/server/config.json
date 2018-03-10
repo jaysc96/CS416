@@ -1,0 +1,17 @@
+{
+  "num-miner-to-return": 4,
+  "rpc-ip-port": "127.0.0.1:12345",
+  "miner-settings": {
+    "genesis-block-hash": "83218ac34c1834c26781fe4bde918ee4",
+    "min-num-miner-connections": 2,
+    "ink-per-op-block": 100,
+    "ink-per-no-op-block": 50,
+    "heartbeat": 5000,
+    "pow-difficulty-op-block": 6,
+    "pow-difficulty-no-op-block": 6,
+    "canvas-settings": {
+      "canvas-x-max": 1024,
+      "canvas-y-max": 1024
+    }
+  }
+}
