@@ -161,7 +161,7 @@ func (DfsF *DfsFile) Read(chunkNum uint8, chunk *Chunk) error {
 		b := make([]byte, 32)
 		DfsF.Fp.ReadAt(b, int64(chunkNum*32))
 		copy(chunk[:], b)
-		fmt.Printf("%s \n", *chunk)
+		fmt.Printf("%s %d\n", *chunk, chunkNum)
 		return nil
 	}
 
@@ -169,6 +169,9 @@ func (DfsF *DfsFile) Read(chunkNum uint8, chunk *Chunk) error {
 	var read [32]byte
 	err := DfsF.Dfs.RpcCli.Call("DFSServer.ReadFile", cd, &read)
 	if err != nil {
+		if err.Error()[0:4] == "open" {
+			return ChunkUnavailableError(chunkNum)
+		}
 		return DisconnectedError(DfsF.Dfs.ServerAddr)
 	}
 	*chunk = read
@@ -300,27 +303,15 @@ func (dfs *Dfs) Open(fname string, mode FileMode) (DFSFile, error) {
 	if mode != DREAD {
 		fid := serverdfs.FileID{fname, dfs.Cli.Id}
 		fm := new(serverdfs.FMetaData)
-		if mode == WRITE {
-			fm.IsWrite = true
-		}
 		err := dfs.RpcCli.Call("DFSServer.OpenFile", fid, fm)
 		if err != nil {
-			if err.Error() == "disconnect" {
-				return nil, FileUnavailableError(fname)
-			}
+			return nil, FileUnavailableError(fname)
+		}
+
+		if mode == WRITE && fm.IsWrite {
 			return nil, OpenWriteConflictError(fname)
 		}
 		if fm.Fid.AuthorId == dfs.Cli.Id {
-			wd, _ := os.Getwd()
-			err := os.MkdirAll(wd+dfs.Path, os.ModePerm)
-			if err != nil {
-				return nil, LocalPathError(dfs.Path)
-			}
-			err = os.Chdir(wd+dfs.Path)
-			if err != nil {
-				return nil, LocalPathError(dfs.Path)
-			}
-
 			exists, _ := dfs.LocalFileExists(fname)
 			var fp *os.File
 
@@ -333,11 +324,7 @@ func (dfs *Dfs) Open(fname string, mode FileMode) (DFSFile, error) {
 				fp.Truncate(256 * 32)
 			}
 			if exists {
-				fmode := os.O_RDONLY
-				if mode == WRITE {
-					fmode = os.O_RDWR
-				}
-				fp, err = os.OpenFile(fname + ".dfs", fmode, os.ModePerm)
+				fp, err = os.Open(fname + ".dfs")
 				if err != nil {
 					return nil, err
 				}
@@ -353,7 +340,7 @@ func (dfs *Dfs) Open(fname string, mode FileMode) (DFSFile, error) {
 	if !exists {
 		return nil, FileDoesNotExistError(fname)
 	}
-	return &DfsFile{nil, mode, *new(serverdfs.FMetaData), dfs, true}, nil
+	return dfs.CliFiles[fname], nil
 }
 
 func (dfs *Dfs) UMountDFS() error {
@@ -369,13 +356,17 @@ func (dfs *Dfs) UMountDFS() error {
 	if err != nil {
 		return DisconnectedError(dfs.ServerAddr)
 	}
+	go dfs.closeFiles()
+	return nil
+}
+
+func (dfs *Dfs) closeFiles() {
 	for _, file := range dfs.CliFiles {
 		if file.IsOpen {
 			file.IsOpen = false
 			file.Fp.Close()
 		}
 	}
-	return nil
 }
 
 // The constructor for a new DFS object instance. Takes the server's
@@ -437,6 +428,16 @@ func MountDFS(serverAddr string, localIP string, localPath string) (dfs DFS, err
 		if err != nil {
 			return nil, DisconnectedError(serverAddr)
 		}
+	}
+
+	wd, _ := os.Getwd()
+	err = os.MkdirAll(wd+localPath, os.ModePerm)
+	if err != nil {
+		return nil, LocalPathError(localPath)
+	}
+	err = os.Chdir(wd+localPath)
+	if err != nil {
+		return nil, LocalPathError(localPath)
 	}
 	return &d, nil
 }
